@@ -19,6 +19,7 @@ async fn ping_handler(Path(ip): Path<String>) -> Json<Value> {
         "success": result.success,
         "rtt_ms":  result.rtt_ms,
         "message": result.message,
+        "location": "United States, New York", // we will make it dynamic later
     }))
 }
 
