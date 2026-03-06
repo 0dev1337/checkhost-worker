@@ -1,0 +1,9 @@
+[server]
+port = 8080
+
+[api]
+key = "your_api_key_here"
+
+[location]
+city = "Kolkata"
+country = "IN"

@@ -1,0 +1,9 @@
+[server]
+port = 3002
+
+[api]
+key = "lol"
+
+[location]
+city = "New York"
+country = "USA"

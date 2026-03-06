@@ -2,7 +2,9 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU16, Ordering};
 
+static SEQ: AtomicU16 = AtomicU16::new(1);
 fn calculate_checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
@@ -52,7 +54,9 @@ fn do_ping(ip: &str) -> Result<(u128, String), Box<dyn std::error::Error>> {
 
     socket.set_read_timeout(Some(Duration::from_secs(2)))?;
 
-    let sequence: u16 = 1;
+    // ✅ Unique sequence per request
+    let sequence: u16 = SEQ.fetch_add(1, Ordering::Relaxed);
+
     let mut packet: Vec<u8> = vec![
         8, 0, 0, 0, 0, 1,
         (sequence >> 8) as u8, (sequence & 0xff) as u8,
@@ -68,28 +72,33 @@ fn do_ping(ip: &str) -> Result<(u128, String), Box<dyn std::error::Error>> {
     socket.send_to(&packet, &dest)?;
 
     let mut buffer = [MaybeUninit::<u8>::uninit(); 128];
-    let (size, from_addr) = socket.recv_from(&mut buffer)?;
 
-    let buffer: Vec<u8> = buffer[..size]
-        .iter()
-        .map(|b| unsafe { b.assume_init() })
-        .collect();
+    // ✅ Loop until we get the reply matching OUR sequence
+    loop {
+        let (size, from_addr) = socket.recv_from(&mut buffer)?;
 
-    let rtt = start.elapsed().as_millis();
+        let buf: Vec<u8> = buffer[..size]
+            .iter()
+            .map(|b| unsafe { b.assume_init() })
+            .collect();
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    const IP_HEADER_LEN: usize = 20;
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    const IP_HEADER_LEN: usize = 0;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        const IP_HEADER_LEN: usize = 20;
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        const IP_HEADER_LEN: usize = 0;
 
-    let data = &buffer[IP_HEADER_LEN..];
-    if data.len() < 8 {
-        return Err("Response too short".into());
+        let data = &buf[IP_HEADER_LEN..];
+        if data.len() < 8 {
+            continue;
+        }
+
+        // ✅ Validate ICMP type and sequence number
+        let reply_seq = u16::from_be_bytes([data[6], data[7]]);
+        if data[0] == 0 && reply_seq == sequence {
+            let rtt = start.elapsed().as_millis();
+            let ip_str = from_addr.as_socket().unwrap().ip().to_string();
+            return Ok((rtt, ip_str));
+        }
+        // Otherwise loop and wait for the correct reply
     }
-
-    if data[0] != 0 {
-        return Err(format!("Unexpected ICMP type: {}", data[0]).into());
-    }
-
-    Ok((rtt, from_addr.as_socket().unwrap().ip().to_string()))
 }
