@@ -7,3 +7,7 @@ key = "lol"
 [location]
 city = "New York"
 country = "USA"
+
+[gateway]
+host = ""
+cooldown = 10

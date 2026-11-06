@@ -4,7 +4,7 @@ use anyhow::Context;
 use check_host_worker::{
     app::{self, AppState},
     config::Config,
-    telemetry,
+    gateway, telemetry,
 };
 use tokio::net::TcpListener;
 use tracing::info;
@@ -29,6 +29,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind {bind_addr}"))?;
     info!(address = %bind_addr, "server listening");
+
+    gateway::spawn(state.clone())?;
 
     let service = app::router(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, service)

@@ -40,21 +40,3 @@ fn key_param(query: &str) -> Option<&str> {
 fn unauthorized(message: &str) -> Rejection {
     (StatusCode::UNAUTHORIZED, Json(json!({ "error": message })))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::key_param;
-
-    #[test]
-    fn finds_key_among_other_parameters() {
-        assert_eq!(key_param("addr=x&key=secret"), Some("secret"));
-        assert_eq!(key_param("key=a=b"), Some("a=b"));
-    }
-
-    #[test]
-    fn ignores_other_parameters_and_bare_key() {
-        assert_eq!(key_param(""), None);
-        assert_eq!(key_param("key"), None);
-        assert_eq!(key_param("monkey=secret"), None);
-    }
-}

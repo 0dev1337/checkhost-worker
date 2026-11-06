@@ -9,6 +9,15 @@ pub struct Config {
     pub server: Server,
     pub api: Api,
     pub location: Location,
+    pub gateway: Gateway,
+}
+
+#[derive(Deserialize)]
+pub struct Gateway {
+    /// URL that receives heartbeats.
+    pub host: String,
+    /// Seconds between heartbeats.
+    pub cooldown: u64,
 }
 
 #[derive(Deserialize)]
