@@ -1,88 +1,37 @@
-mod ping;
-mod config;
-mod middleware;
-mod tcp;
-mod udp;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::{
-    extract::Path,
-    middleware as axum_middleware,
-    response::Json,
-    routing::get,
-    Router,
+use anyhow::Context;
+use check_host_worker::{
+    app::{self, AppState},
+    config::Config,
+    telemetry,
 };
-use serde_json::{json, Value};
-async fn ping_handler(Path(ip): Path<String>) -> Json<Value> {
-    let cfg = config::get();
+use tokio::net::TcpListener;
+use tracing::info;
 
-    let result = tokio::task::spawn_blocking(move || {
-        ping::ping(&ip)
-    }).await.unwrap();
-
-    Json(json!({
-        "ip":       result.ip,
-        "success":  result.success,
-        "rtt_ms":   result.rtt_ms,
-        "message":  result.message,
-        "location": format!("{}, {}", cfg.location.city, cfg.location.country),
-    }))
-}
-async fn tcp_handler(Path(addr): Path<String>) -> Json<serde_json::Value> {
-    let addr_clone = addr.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        tcp::tcp_ping(&addr_clone)
-    }).await.unwrap();
-
-    match result {
-        Ok(duration) => Json(json!({
-            "success": true,
-            "address": addr,
-            "elapsed_ms": duration.as_millis()
-        })),
-        Err(err) => Json(json!({
-            "success": false,
-            "address": addr,
-            "error": err.to_string()
-        })),
-    }
-}
-
-async fn udp_handler(Path(addr) : Path<String>) -> Json<serde_json:: Value>{
-    let addr_clone = addr.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        udp::udp_ping(&addr_clone)
-    }).await.unwrap();
-
-    match result {
-        Ok(duration) => Json(json!({
-            "success": true,
-            "address": addr,
-            "elapsed_ms": duration.as_millis()
-        })),
-        Err(err) => Json(json!({
-            "success": false,
-            "address": addr,
-            "error": err.to_string()
-        })),
-    }
-}
-
+const CONFIG_PATH: &str = "config.toml";
 
 #[tokio::main]
-async fn main() {
-    config::init("config.toml");
-    let cfg = config::get();
+async fn main() -> anyhow::Result<()> {
+    telemetry::init();
 
-    let app = Router::new()
-        .route("/ping/{ip}", get(ping_handler))
-        .route("/tcp/{addr}",get(tcp_handler))
-        .route("/udp/{addr}",get(udp_handler))
-        .layer(axum_middleware::from_fn(middleware::auth::auth_middleware));
+    let config = Config::load(CONFIG_PATH)?;
+    let bind_addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
+    info!(
+        config = CONFIG_PATH,
+        city = %config.location.city,
+        country = %config.location.country,
+        "configuration loaded"
+    );
 
-    let addr = format!("0.0.0.0:{}", cfg.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    println!("Server running on http://localhost:{}", cfg.server.port);
-    axum::serve(listener, app).await.unwrap();
+    let state = Arc::new(AppState::new(config)?);
+    let listener = TcpListener::bind(bind_addr)
+        .await
+        .with_context(|| format!("failed to bind {bind_addr}"))?;
+    info!(address = %bind_addr, "server listening");
+
+    let service = app::router(state).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, service)
+        .await
+        .context("server terminated unexpectedly")
 }

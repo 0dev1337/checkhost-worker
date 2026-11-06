@@ -1,38 +1,60 @@
+use std::sync::Arc;
+
 use axum::{
-    extract::Request,
+    Json,
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
-    response::{Json, Response},
+    response::Response,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use tracing::warn;
 
-pub async fn auth_middleware(
+use crate::app::AppState;
+
+type Rejection = (StatusCode, Json<Value>);
+
+/// Rejects requests whose `key` query parameter does not match the configured API key.
+pub async fn require_api_key(
+    State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
-) -> Result<Response, (StatusCode, Json<Value>)> {
-    let cfg = crate::config::get();
+) -> Result<Response, Rejection> {
+    match key_param(request.uri().query().unwrap_or_default()) {
+        Some(key) if key == state.config.api.key => Ok(next.run(request).await),
+        Some(_) => {
+            warn!("rejected request: invalid API key");
+            Err(unauthorized("Invalid API key"))
+        }
+        None => {
+            warn!("rejected request: missing API key");
+            Err(unauthorized("Missing API key"))
+        }
+    }
+}
 
-    // Extract ?key=... from query string
-    let query = request.uri().query().unwrap_or("");
-    let api_key = query
-        .split('&')
-        .find_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            match (parts.next(), parts.next()) {
-                (Some("key"), Some(val)) => Some(val),
-                _ => None,
-            }
-        });
+fn key_param(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| pair.strip_prefix("key="))
+}
 
-    match api_key {
-        Some(k) if k == cfg.api.key => Ok(next.run(request).await),
-        Some(_) => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Invalid API key" })),
-        )),
-        None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing API key" })),
-        )),
+fn unauthorized(message: &str) -> Rejection {
+    (StatusCode::UNAUTHORIZED, Json(json!({ "error": message })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_param;
+
+    #[test]
+    fn finds_key_among_other_parameters() {
+        assert_eq!(key_param("addr=x&key=secret"), Some("secret"));
+        assert_eq!(key_param("key=a=b"), Some("a=b"));
+    }
+
+    #[test]
+    fn ignores_other_parameters_and_bare_key() {
+        assert_eq!(key_param(""), None);
+        assert_eq!(key_param("key"), None);
+        assert_eq!(key_param("monkey=secret"), None);
     }
 }
